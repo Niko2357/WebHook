@@ -1,61 +1,83 @@
-const express = require("express");
-const crypto = require("crypto");
-const path = require("path");
-
+const express = require('express');
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static('public'));
 
-const SHARED_SECRET = "heslo";
+const crypto = require('crypto');
+const SHARED_SECRET = 'heslo';
 
-app.post("/order", (req, res) => {
-  const order = req.body;
-  console.log(`Order accepted: ${order.id}`);
+const orders = {};
+const processedEvents = new Set();
 
-  res.status(202).json({ status: "Order accepted" });
+let counter = 1
 
-  const sendWebhook = (status) => {
-    const payload = {
-      id: order.id,
-      status,
-      event_id: `${order.id}-${status}-${Date.now()}`,
-    };
+function getOrderId() {
+        const now = new Date();
+        const pad = (n) => n.toString().padStart(2, '0');
 
-    const body = JSON.stringify(payload);
+        const year = now.getFullYear();
+        const month = pad(now.getMonth() + 1);
+        const day = pad(now.getDate());
+        const hours = pad(now.getHours());
+        const minutes = pad(now.getMinutes());
+        const seconds = pad(now.getSeconds());
 
-    const sig = crypto
-      .createHmac("sha256", SHARED_SECRET)
-      .update(body, "utf8")
-      .digest("hex");
+    return `order-${year}${month}${day}-${hours}${minutes}${seconds}`;
+    }
 
-    fetch(order.callbackUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Signature": sig,
-      },
-      body,
-    })
-    .catch((err) =>
-      console.error(`${order.id}: Failed to send webhook for ${status}`, err)
-    );
+app.get('/send-order', async (req, res) => {
+  const order = {
+    id: counter ++,
+    callbackUrl: 'http://localhost:3001/update',
+    status: 'Order request',
   };
 
-  setTimeout(() => {
-    console.log(`${order.id}: Order in process`);
-    sendWebhook("Order in process");
-
-    setTimeout(() => {
-      console.log(`${order.id}: Delivering`);
-      sendWebhook("Delivering");
-
-      setTimeout(() => {
-        console.log(`${order.id}: Delivered`);
-        sendWebhook("Delivered");
-      }, 5005);
-    }, 5005);
-  }, 5005);
+  try {
+    const response = await fetch('http://localhost:3000/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(order)
+    });
+  } catch (err) {
+    console.error('Fetch failed:', err.message);
+    res.status(500).send('Courier is not available');
+  }
+  res.redirect('/');
 });
 
-const PORT = 3000;
-app.listen(PORT, () => console.log(`Courier runs on http://localhost:${PORT}`));
+app.post('/update', express.json(), (req, res) => {
+  const sigHeader = (req.get('X-Signature') || '').trim();
+
+  const rawBody = JSON.stringify(req.body);
+
+  const expectedSig = crypto.createHmac('sha256', SHARED_SECRET)
+                            .update(rawBody, 'utf8')
+                            .digest('hex');
+
+  if (!crypto.timingSafeEqual(Buffer.from(sigHeader, 'utf8'), Buffer.from(expectedSig, 'utf8'))) {
+    console.log('Neplatný podpis – webhook ignorován:', req.body);
+    return res.sendStatus(401);
+  }
+
+  const { id, status, event_id } = req.body;
+
+  if (processedEvents.has(event_id)) {
+    console.log(`Duplikátní webhook ignorován: ${event_id}`);
+    return res.sendStatus(200);
+  }
+  processedEvents.add(event_id);
+
+  orders[id] = status;
+  console.log(`Aktualizace od kurýra: ${id} → ${status} (event_id: ${event_id})`);
+  res.sendStatus(200);
+});
+
+
+app.get('/orders', (req, res) => {
+  res.json(orders);
+});
+
+
+app.listen(3001, () => {
+  console.log('Restaurant runs on http://localhost:3001');
+});

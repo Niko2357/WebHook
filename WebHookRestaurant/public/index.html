@@ -2,9 +2,34 @@
 <html lang="cs">
 <head>
   <meta charset="UTF-8" />
-  <title>Kurýr</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>Stavy objednávek – Restaurace</title>
+   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <h1>Přehled objednávek</h1>
+  <button id="newOrderBtn">Odeslat novou objednávku</button>
+  <ul id="orderList"></ul>
+
+  <script>
+    async function loadOrders() {
+      const res = await fetch('/orders');
+      const data = await res.json();
+      const list = document.getElementById('orderList');
+      list.innerHTML = '';
+
+      Object.entries(data).forEach(([id, status]) => {
+        const li = document.createElement('li');
+        li.innerHTML = `<strong>${id}</strong> → <span class="status">${status}</span>`;
+        list.appendChild(li);
+      });
+    }
+
+    setInterval(loadOrders, 3000);
+    loadOrders();
+    document.getElementById('newOrderBtn').addEventListener('click', () => {
+      fetch('/send-order').then(() => setTimeout(loadOrders, 1000));
+    });
+    
+  </script>
 </body>
 </html>
